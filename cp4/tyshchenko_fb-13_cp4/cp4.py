@@ -207,11 +207,13 @@ def encrypt(M: int, pubkey: list) -> int:
     
     return horner(M, e, n)
     
-# Decrypt a message C with a private key privkey = [d, p, q].
+# Decrypt a message C with a private key privkey and a public key pubkey.
+# privkey = [d, p, q, phi(n)]
+# pubkey = [e, n]
 # Returns decrypted message.
-def decrypt(C: int, privkey: list) -> int:
-    d, p, q, _ = privkey
-    n = p * q
+def decrypt(C: int, privkey: list, pubkey: list) -> int:
+    d = privkey[0]
+    n = pubkey[1]
     # Case invalid input.
     if C >= n:
         print(f"decrypt: invalid input C={C} >= n={n}")
@@ -219,12 +221,15 @@ def decrypt(C: int, privkey: list) -> int:
 
     return horner(C, d, n)
 
-# Sign message M with a private key privkey = [d, p. q].
+# Sign message M with a private key privkey and a public key pubkey.
+# privkey = [d, p, q, phi(n)]
+# pubkey = [e, n]
 # Returns list [M, S].
 # S - digital signature.
-def sign(M: int, privkey: list) -> list:
-    d, p, q, _ = privkey
-    S = horner(M, d, p * q)
+def sign(M: int, privkey: list, pubkey: list) -> list:
+    d = privkey[0]
+    n = pubkey[1]
+    S = horner(M, d, n)
     return [M, S]
 
 # Check digital signature with a public key pubkey = [e, n].
@@ -241,7 +246,6 @@ def verify(signed: list, pubkey: list) -> bool:
 # pubkeyB = [e1, n1]
 # Returns list [k1, S1]
 def send_key(k: int, privkeyA: list, pubkeyA: list, pubkeyB: list) -> list:
-    d, p, q, _ = privkeyA
     e, n = pubkeyA
     e1, n1 = pubkeyB
     # Case invalid input.
@@ -253,9 +257,9 @@ def send_key(k: int, privkeyA: list, pubkeyA: list, pubkeyB: list) -> list:
         return -1
         
     # Calculate digital signatures S, S1 and key k1.
-    S = horner(k, d, n)
-    S1 = horner(S, e1, n1)
-    k1 = horner(k, e1, n1)
+    k, S = sign(k, privkeyA, pubkeyA)
+    S1 = encrypt(S, pubkeyB)
+    k1 = encrypt(k, pubkeyB)
     return [k1, S1]
 
 # B receives encrypted signed secret key k from A and verifies it.
@@ -263,15 +267,18 @@ def send_key(k: int, privkeyA: list, pubkeyA: list, pubkeyB: list) -> list:
 # privkeyB = [d1, p1, q1, phi(n1)]
 # pubkeyA = [e, n]
 # pubkeyB = [e1, n1]
-# Returns True if signature is correct and False otherwise.
-def receive_key(signed: list, privkeyB: list, pubkeyA: list, pubkeyB: list) -> bool:
+# Returns list with a secret key and signature if signature is correct
+# or an empty list otherwise.
+def receive_key(signed: list, privkeyB: list, pubkeyA: list, pubkeyB: list) -> list:
     k1, S1 = signed
-    d1, p1, q1, _ = privkeyB
-    e1, n1 = pubkeyB
     # Restore digital signature S and key k.
-    k = horner(k1, d1, n1)
-    S = horner(S1, d1, n1)
-    return [k, S]
+    k = decrypt(k1, privkeyB, pubkeyB)
+    S = decrypt(S1, privkeyB, pubkeyB)
+    # Verify restored signature.
+    if verify([k, S], pubkeyA):
+        return [k, S]
+    else:
+        return [None, None]
     
 # Test all functions.
 def tests() -> None:
@@ -331,7 +338,8 @@ Public key:
 Private key:
 \td = {privkey[0]}
 \tp = {privkey[1]}
-\tq = {privkey[2]}""")
+\tq = {privkey[2]}
+\tphi(n) = {privkey[3]}""")
 
     # Encrypt and decrypt a message.
     M = randint(1, 2 ** 16)
@@ -339,10 +347,10 @@ Private key:
     print(f"""\n=== RSA ENCRYPTION/DECRYPTION TEST ===
 Original:\t{M}
 Encrypted:\t{C}
-Decrypted:\t{decrypt(C, privkey)}""")
+Decrypted:\t{decrypt(C, privkey, pubkey)}""")
 
     # Sign and verify a message.
-    signed = sign(M, privkey)
+    signed = sign(M, privkey, pubkey)
     print(f"""\n=== RSA SIGN/VERIFY TEST ===
 Message:\t{signed[0]}
 Signature:\t{signed[1]}
@@ -391,7 +399,7 @@ def RSA(pubkey_server: list) -> None:
     e_server, n_server = pubkey_server
     if n_client > n_server:
         print("[INFO] Client's modulus is greater than server's: " + \
-            "possible data loss during encryption and key sending.")
+            "possible data loss during encryption and key sending on client.")
     # Processing loop.
     while True:
         cmd = input("\nEnter command (\'h\' for help): ")
@@ -460,13 +468,13 @@ Public exponent:\t{to_hex(e_server)}""")
         # Decrypt encrypted message by server on client.
         elif cmd == 'd':
             C = int(input("Enter encrypted message C: "), 16)
-            M = decrypt(C, privkey_client)
+            M = decrypt(C, privkey_client, pubkey_client)
             print(f"Decrypted message M:\t{to_hex(M)}")
         
         # Sign a message for server.
         elif cmd == "si":
             M = int(input("Enter message M: "), 16)
-            signed = sign(M, privkey_client)
+            signed = sign(M, privkey_client, pubkey_client)
             S = signed[1]
             print(f"Message:\t{to_hex(M)}\nSignature:\t{to_hex(S)}")
         
@@ -496,7 +504,7 @@ Encrypted signature S1:\t{to_hex(S1)}""")
             signed = [k1, S1]
             received = receive_key(signed, privkey_client, pubkey_server, pubkey_client)
             k, S = received
-            result = verify(received, pubkey_server)
+            result = k is not None and S is not None
             print(f"""Decrypted key k:\t{to_hex(k)}
 Decrypted signature S:\t{to_hex(S)}
 [INFO] {result}""")
@@ -523,7 +531,9 @@ if __name__ == "__main__":
         print("[INFO] Establishing tests...")
         tests()  
         sys.exit(0)
+    # Show correct input.
     else:
-        print(f"""USAGE: {sys.argv[0]} MODULUS PUBEXP
+        print(f"""USAGE:\t{sys.argv[0]} MODULUS PUBEXP
+\t{sys.argv[0]} t\n
 \tMODULUS\t- server's modulus (hex).
 \tPUBEXP\t- server's public exponent (hex).""")
